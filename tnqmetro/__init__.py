@@ -22,6 +22,7 @@ import numpy as np
 
 from ncon import ncon
 
+from tqdm import tqdm
 
 ########################################
 #                                      #
@@ -2567,7 +2568,8 @@ def fin2_FoM_FoMD_optbd(n,d,bc,ch,chp,epsilon,cini=None,a0ini=None,imprecision=1
     return result,resultm,c,a0
 
 
-def fin2_FoM_optbd(n,d,bc,a,b,epsilon,cini=None,imprecision=10**-2,bdlmax=100,alwaysbdlmax=False,lherm=True):
+### I have added a new parameter tol_inv here that sets the tolerance of the pinv operation
+def fin2_FoM_optbd(n,d,bc,a,b,epsilon,cini=None,imprecision=10**-2,tol_fom=None,bdlmax=100,alwaysbdlmax=False,lherm=True):
     """
     Optimization of FoM over SLD MPO and also check of convergence in bond dimension. Function for finite size systems. Version with two states separated by epsilon.
     
@@ -2591,7 +2593,8 @@ def fin2_FoM_optbd(n,d,bc,a,b,epsilon,cini=None,imprecision=10**-2,bdlmax=100,al
     """
     while True:
         if cini is None:
-            bdl = 1
+            # bdl = 1
+            bdl = 2
             rng = np.random.default_rng()
             if bc == 'O':
                 c = [0]*n
@@ -2621,7 +2624,8 @@ def fin2_FoM_optbd(n,d,bc,a,b,epsilon,cini=None,imprecision=10**-2,bdlmax=100,al
                 result = resultv[bdl-1]
                 return result,resultv,c
         elif  bc == 'P':
-            resultv[bdl-1],c = fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision,lherm)
+            resultv[bdl-1],c = fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision,tol_fom,lherm)
+            print('Result at this iteration: ',resultv[bdl-1])
         factorv = np.array([0.5,0.25,0.1,1,0.01])
         problem = False
         while True:
@@ -2637,7 +2641,8 @@ def fin2_FoM_optbd(n,d,bc,a,b,epsilon,cini=None,imprecision=10**-2,bdlmax=100,al
                     if bc == 'O':
                         resultv[bdl-1],cnew = fin2_FoM_OBC_optm(a,b,epsilon,c,imprecision,lherm)
                     elif  bc == 'P':
-                        resultv[bdl-1],cnew = fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision,lherm)
+                        resultv[bdl-1],cnew = fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision,tol_fom,lherm)
+                        print('Result at this iteration: ',resultv[bdl-1])
                     if resultv[bdl-1] >= resultv[bdl-2]:
                         c = cnew
                         break
@@ -2647,6 +2652,7 @@ def fin2_FoM_optbd(n,d,bc,a,b,epsilon,cini=None,imprecision=10**-2,bdlmax=100,al
                         break
                 if problem:
                     break
+
                 if not(alwaysbdlmax) and resultv[bdl-1] < (1+imprecision)*resultv[bdl-2]:
                     resultv = resultv[0:bdl]
                     result = resultv[bdl-1]
@@ -2989,8 +2995,8 @@ def fin2_FoM_OBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
         fomval = fom[-1]
     return fomval,c
 
-
-def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
+### I have added a new parameter tol_inv here that sets the tolerance of the pinv operation
+def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,tol_fom=None,lherm=True):
     """
     Optimization of FoM over MPO for SLD. Function for finite size systems with PBC. Version with two states separated by epsilon.
     
@@ -3011,7 +3017,12 @@ def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
     bdr = np.shape(a)[0]
     bdrp = np.shape(b)[0]
     bdl = np.shape(c)[0]
-    tol_fom = 0.1*imprecision/n**2
+    
+    print('call to fin2_FoM_PBC_optm with bond dimension',bdl)
+
+    if tol_fom == None:
+        tol_fom = 0.1*imprecision/n**2
+    
     if n == 1:
         tensors = [b[:,:,:,:,0],np.eye(bdl)]
         legs = [[1,1,-4,-3],[-2,-1]]
@@ -3027,9 +3038,13 @@ def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
         l2 = np.reshape(l2,(bdl*bdl*d*d,bdl*bdl*d*d),order='F')
         dl2 = l2+l2.T
         dl1 = 2*(l1-l1_0)/epsilon
-        dl2pinv = np.linalg.pinv(dl2,tol_fom)
-        dl2pinv = (dl2pinv+dl2pinv.T)/2
-        cv = dl2pinv @ dl1
+        
+        ## Pseudo inverse or least squares
+        # dl2pinv = np.linalg.pinv(dl2,tol_fom)
+        # dl2pinv = (dl2pinv+dl2pinv.T)/2
+        # cv = dl2pinv @ dl1
+        cv = np.linalg.lstsq(dl2,dl1,tol_fom)[0]
+
         c[:,:,:,:,0] = np.reshape(cv,(bdl,bdl,d,d),order='F')
         if lherm:
             c[:,:,:,:,0] = (c[:,:,:,:,0]+np.conj(np.moveaxis(c[:,:,:,:,0],2,3)))/2
@@ -3076,14 +3091,19 @@ def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
             l2 = np.reshape(l2,(bdl*bdl*d*d,bdl*bdl*d*d),order='F')
             dl2 = l2+l2.T
             dl1 = 2*(l1-l1_0)/epsilon
-            dl2pinv = np.linalg.pinv(dl2,tol_fom)
-            dl2pinv = (dl2pinv+dl2pinv.T)/2
-            cv = dl2pinv @ dl1
+                        
+            ## Pseudo inverse or least squares
+            # dl2pinv = np.linalg.pinv(dl2,tol_fom)
+            # dl2pinv = (dl2pinv+dl2pinv.T)/2
+            # cv = dl2pinv @ dl1            
+            cv = np.linalg.lstsq(dl2,dl1,tol_fom)[0]
+
             c[:,:,:,:,0] = np.reshape(cv,(bdl,bdl,d,d),order='F')
             if lherm:
                 c[:,:,:,:,0] = (c[:,:,:,:,0]+np.conj(np.moveaxis(c[:,:,:,:,0],2,3)))/2
                 cv = np.reshape(c[:,:,:,:,0],-1,order='F')
             fom = np.append(fom,np.real(2*cv @ (l1-l1_0)/epsilon - cv @ l2 @ cv))
+            
             tensors = [c[:,:,:,:,0],b[:,:,:,:,0]]
             legs = [[-1,-3,1,2],[-2,-4,2,1]]
             l1c = ncon(tensors,legs)
@@ -3094,6 +3114,8 @@ def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
             legs = [[-1,-4,1,2],[-2,-5,2,3],[-3,-6,3,1]]
             l2c = ncon(tensors,legs)
             for x in range(1,n-1):
+            # for x in tqdm(range(1,n-1)):
+                # print(x)
                 tensors = [l1c,b[:,:,:,:,x],l1f[:,:,:,:,x]]
                 legs = [[3,4,-1,1],[1,2,-4,-3],[-2,2,3,4]]
                 l1 = ncon(tensors,legs)
@@ -3108,9 +3130,13 @@ def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
                 l2 = np.reshape(l2,(bdl*bdl*d*d,bdl*bdl*d*d),order='F')
                 dl2 = l2+l2.T
                 dl1 = 2*(l1-l1_0)/epsilon
-                dl2pinv = np.linalg.pinv(dl2,tol_fom)
-                dl2pinv = (dl2pinv+dl2pinv.T)/2
-                cv = dl2pinv @ dl1
+                
+                ## Pseudo inverse or least squares
+                # dl2pinv = np.linalg.pinv(dl2,tol_fom)
+                # dl2pinv = (dl2pinv+dl2pinv.T)/2
+                # cv = dl2pinv @ dl1
+                cv = np.linalg.lstsq(dl2,dl1,tol_fom)[0]
+
                 c[:,:,:,:,x] = np.reshape(cv,(bdl,bdl,d,d),order='F')
                 if lherm:
                     c[:,:,:,:,x] = (c[:,:,:,:,x]+np.conj(np.moveaxis(c[:,:,:,:,x],2,3)))/2
@@ -3139,16 +3165,24 @@ def fin2_FoM_PBC_optm(a,b,epsilon,c,imprecision=10**-2,lherm=True):
             l2 = np.reshape(l2,(bdl*bdl*d*d,bdl*bdl*d*d),order='F')
             dl2 = l2+l2.T
             dl1 = 2*(l1-l1_0)/epsilon
-            dl2pinv = np.linalg.pinv(dl2,tol_fom)
-            dl2pinv = (dl2pinv+dl2pinv.T)/2
-            cv = dl2pinv @ dl1
+            
+            ## Pseudo inverse or least squares
+            # dl2pinv = np.linalg.pinv(dl2,tol_fom)
+            # dl2pinv = (dl2pinv+dl2pinv.T)/2
+            # cv = dl2pinv @ dl1
+            cv = np.linalg.lstsq(dl2,dl1,tol_fom)[0]
+
             c[:,:,:,:,n-1] = np.reshape(cv,(bdl,bdl,d,d),order='F')
             if lherm:
                 c[:,:,:,:,n-1] = (c[:,:,:,:,n-1]+np.conj(np.moveaxis(c[:,:,:,:,n-1],2,3)))/2
                 cv = np.reshape(c[:,:,:,:,n-1],-1,order='F')
             fom = np.append(fom,np.real(2*cv @ (l1-l1_0)/epsilon - cv @ l2 @ cv))
+
+            print('current iter_fom value =',iter_fom,' with fom value=',fom[-1])
+
             iter_fom += 1
             if iter_fom >= 2 and all(fom[-2*n:] > 0) and np.std(fom[-2*n:])/np.mean(fom[-2*n:]) <= relunc_fom:
+                print('final iter_fom value =',iter_fom)
                 break
         fomval = fom[-1]
     return fomval,c
